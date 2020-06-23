@@ -28,7 +28,7 @@ function objs = nnlink_rp(objs, step, memory, dispopt, diagnostic)
 % July 18, 2014: Don't remove "lost" objects from the object matrix!
 % July 10, 2016: Fixing memory, yet again! (Actually fine, but change 
 %      default to zero (no memory), and properly comment)
-% last modified July 10, 2016
+% last modified June 23, 2020 (minor formatting changes)
 
 
 if ~exist('step', 'var') || isempty(step)
@@ -55,8 +55,11 @@ objs(6, objs(5,:) == startframe) = 1:fm1numobjs;
 nextid = fm1numobjs + 1; % the next available track id
 
 if dispopt
-    progtitle = sprintf('nnlink_{rp}: Linking objects...  '); 
-    progbar = waitbar(0, progtitle);  % will display progress
+    % Convoluted use of "children" to allow the underscore in the waitbar title...
+    progbar = waitbar(0, 'Temporary');
+    progbar.Children.Title.Interpreter = 'none';
+    progtitle = sprintf('nnlink_rp: Linking objects...  '); 
+    progbar = waitbar(0, progbar, progtitle);  % will display progress
 end
 
 if diagnostic
@@ -82,9 +85,9 @@ for k = 1:length(unqframes)-1
     end
     if diagnostic
         disp(' ')
-        fs = sprintf('Diagnostic: k = %d, frame %d', k, unqframes(k)); disp(fs)
-        fs = sprintf('Diagnostic: Number of objects in the current frame ncur = %d', ncur); disp(fs)
-        fs = sprintf('Diagnostic: Number of objects in the next frame nnex = %d', nnex); disp(fs)
+        fprintf('Diagnostic: k = %d, frame %d\n', k, unqframes(k)); 
+        fprintf('Diagnostic: Number of objects in the current frame ncur = %d\n', ncur); 
+        fprintf('Diagnostic: Number of objects in the next frame nnex = %d\n', nnex); 
     end
     % nearest-neighboor matching algorithm
     pcur = objs(1:2, cur); % positions, current frame
@@ -223,8 +226,7 @@ objs(:, singletons) = [];
 if dispopt
     % Display information about tracks found
     ntracks = length(unique(objs(6,:)));
-    fs = sprintf('Found %d unique tracks.', ntracks);
-    disp(fs)
+    fprintf('Found %d unique tracks.\n', ntracks);
     if ntracks <= 10
         for j=unique(objs(6,:))
             objs_j = objs(:,objs(6,:)==j);  % track j
@@ -233,10 +235,9 @@ if dispopt
             y = objs_j(2,:);  % y positions of this track
             stdj = sqrt(var(x) + var(y));  % standard deviation of this track's position
             %frj = objs(5,find(objs(6,:)==j));
-            fs = sprintf('   Track %d: frames %d:%d (%d frames), std. %.1f pixels',...
+            fprintf('   Track %d: frames %d:%d (%d frames), std. %.1f pixels\n',...
                 j, min(frj), max(frj), length(frj), stdj);
             % Note that some frames between min and max may not be good
-            disp(fs)
         end
     else
         disp('More than 10 tracks found; not displaying details.');

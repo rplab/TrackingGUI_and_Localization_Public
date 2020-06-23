@@ -47,20 +47,22 @@
 % selection / data table are taken from WaterGUI[1-6].m by Matt Jemielita, 2010
 %
 % Raghuveer Parthasarathy
-% Modifications since June 2012:
-% June 10, 2012 (added text  output option)
-% June 27, 2012 (fixed bug for frame slider range if single image is input;
-%                consistent definition of threshold default values)
+% Significant modifications since June 2012:
 % August 25, 2012: uses fo5_rp.m and allows input of prior neighborhood
 %    positions, gradient voting for region finding, etc.
 % September 9, 2016: reconcile with Tristan Hormel's version, including
 %    Tristan's April 2014 routines for visualizing results of phase 
 %    separated domain tracking (bilateral filter, etc.) Note that watershed
 %    segmentation code is commented out (hdispwater, etc.)
-% Dec. 17, 2018: adjust GUI size
 % July 17, 2019: allow adjustable display intensity (sliders)
-% Last modified Sept. 27, 2019: minor edit in line 1205, to allow empty
-%    tmpobj (no objects)
+% April 6, 2020 (revised to be more robust about avoiding
+%      an error if optimization toolbox isn't there)
+% April 28-29, 2020: fixed image size issue; major changes to
+%      culling (see notes); allow de-drifting (to save output, not plot)
+% June 23, 2020: Remove Tristan Hormels's April 2014 - Sept. 2016 routines
+%    for visualizing results of phase separated domain tracking 
+%    (bilateral filter, etc.)
+% Last modified June 23, 2020
 
 function fGUI = TrackingGUI_rp(im)
 
@@ -77,10 +79,19 @@ if ~exist('im', 'var') || isempty(im)
     [fbase, frmin, frmax, formatstr, FileName1, ~, PathName1, ext, ismultipage] = ...
         getnumfilelist;
     % If there's only one image, getnumfilelist returns empty arrays for
-    % frmin, frmax, formatstr.  Replace frmin and frmax with 1s.
+    %   frmin, frmax, formatstr.  Replace frmin and frmax with 1s.
+    %   fbase is the complete filename
     if isempty(frmin)
         frmin = 1;
         frmax = 1;
+    end
+    if frmax < frmin
+        % User may have selected the ending image as the start; reverse
+        warndlg('"Start" and "End" image files appear to be reversed. Flipping these...')
+        pause(1)
+        temp_fr = frmax;
+        frmax = frmin;
+        frmin = temp_fr;
     end
 else
     % images were input
@@ -108,20 +119,23 @@ fGUI = figure('Name','TrackingGUI_rp', 'Menubar','none', ...
 % in the hupdate panel.
 % hfileupdate controls what files will be analyzed by the program
 
+panelLeftPos = 0.67; % Left position of the main control panels
+levelLeftPos = 0.60; % Left position of the "levels" panel
+
 % Signature
 uicontrol('Style','text','BackgroundColor', [0.5 0.7 0.7], ...
     'String','TrackingGUI_rp.m.  Raghuveer Parthasarathy, 2012-', ...
     'FontWeight', 'bold', 'Units', 'normalized',...
     'HorizontalAlignment', 'left', 'Position',...
-    [0.67 0.96 0.25 0.03]);
+    [panelLeftPos 0.96 0.25 0.03]);
 %Create an exit button
 hexit = uicontrol('Style','pushbutton',...
     'String','Exit','Units', 'normalized','FontWeight', 'bold',...
-    'Position',[0.94 0.86 0.05 0.1], 'Callback',{@exit_Callback});
+    'Position',[0.94 0.87 0.05 0.08], 'Callback',{@exit_Callback});
 
-%% Panel for loading the files that will be analyzed by the GUI 
+%% Panel for loading and displaying the images that will be analyzed by the GUI 
 himageselect = uipanel('Title', 'Display Frame', 'FontSize', 11, ...
-    'Units', 'normalized', 'Position', [0.67 0.86 0.25 0.1]);
+    'Units', 'normalized', 'Position', [panelLeftPos 0.87 0.25 0.08]);
    % Primary frame no. to load, analyze
 % hFileNameText = 
 uicontrol('Parent', himageselect, ...
@@ -131,18 +145,28 @@ uicontrol('Parent', himageselect, ...
 % hframenotextinit = 
 uicontrol('Parent', himageselect,'Style','text','Units',...
     'normalized','String','Frame no.', 'FontWeight', 'bold', ...
-    'HorizontalAlignment', 'left', 'Position',[0.05 0.1 0.2 0.4]);
+    'HorizontalAlignment', 'left', 'Position',[0.05 0.05 0.2 0.4]);
 hframenotext  = uicontrol('Parent', himageselect,'Style','edit','Units', ...
-    'normalized', 'Position',[0.35, 0.1, 0.15, 0.4], ...
+    'normalized', 'Position',[0.35, 0.05, 0.15, 0.4], ...
     'Callback',{@framenotext_Callback});
+if Nframes==1
+    % to avoid problems with single images.
+    slider_max = 1.1;
+    slider_min = 1.0;
+    slider_step = [0.1 0.5];
+else
+    slider_max = frmax;
+    slider_min = frmin;
+    slider_step = [min(0.01, 1/Nframes) min([0.1, 10/Nframes])];
+end
 hframeno = uicontrol('Parent', himageselect,'Style','slider', ...
-    'Max', frmax + 0.1*(Nframes==1), 'Min', frmin, 'Value', frmin, 'Units', 'normalized',...
-    'SliderStep', [1/Nframes min([0.1, 10/Nframes])], 'Position', ...
-    [0.55 0.1 0.35 0.4], 'Callback',{@frameno_Callback});
+    'Max', slider_max, 'Min', slider_min, 'Value', slider_min, 'Units', 'normalized',...
+    'SliderStep', slider_step, 'Position', ...
+    [0.55 0.05 0.35 0.4], 'Callback',{@frameno_Callback});
 
 %% Panel for adjusting display range
 hAdjustDisplay = uipanel('Title', 'Level', 'FontSize', 11, ...
-    'Units', 'normalized', 'Position', [0.55 0.70 0.05 0.29]);
+    'Units', 'normalized', 'Position', [levelLeftPos 0.70 0.05 0.29]);
 % Automatic display intensity range
 hAutoDisplay = uicontrol('Parent', hAdjustDisplay,'Style','checkbox',...
     'String','Auto','Fontweight', 'bold', 'Units', 'normalized', ...
@@ -160,21 +184,21 @@ hDisplayRangeMax = uicontrol('Parent', hAdjustDisplay,'Style','slider', ...
 
 %% Neighborhood finding parameters
 hnhoodparampanel = uipanel('Title','Neighborhood Parameters','FontSize',11,...
-'Units',  'normalized', 'Position',[.67 .57 .32 .25]);
+'Units',  'normalized', 'Position',[panelLeftPos .62 .32 .23]);
 uicontrol('Parent', hnhoodparampanel,'Style','text','Units',...
     'normalized','String','Process Option', 'FontWeight', 'bold', ...
-    'HorizontalAlignment', 'left', 'Position',[0.02 0.87 0.27 0.12]);
+    'HorizontalAlignment', 'left', 'Position',[0.02 0.86 0.27 0.12]);
 % processing options for fo5_rp.m -- note that these strings need to be
 % identical to those expected by fo5_rp.m
 processoptarray = {'spatialfilter', 'gradientvote', 'none'};
 hprocessopt = uicontrol('Parent', hnhoodparampanel, 'Style','popupmenu', ...
     'String', strcat(char(processoptarray(1)), ' | ', char(processoptarray(2)), ' | ', ...
-    char(processoptarray(3))), 'Units', 'normalized','Position', [0.3,0.87,0.3,0.12], ...
+    char(processoptarray(3))), 'Units', 'normalized','Position', [0.3,0.86,0.3,0.12], ...
     'Callback',{@processopt_Callback});
 
 % Spatial filtering options
 defaultobjsize = 7;
-spatialfilt_ypos = 0.71;  % (relative) y-position of spatial filtering option parameters
+spatialfilt_ypos = 0.69;  % (relative) y-position of spatial filtering option parameters
 uicontrol('Parent', hnhoodparampanel,'Style','text','Units',...
     'normalized','String','bpfiltsize', 'FontWeight', 'bold', ...
     'HorizontalAlignment', 'left', 'Position',[0.02 spatialfilt_ypos 0.15 0.1]);
@@ -205,7 +229,7 @@ hlockobjsize  = uicontrol('Parent', hnhoodparampanel,'Style','toggle',...
 
 % Gradient voting options
 defaultobjsize = 7;
-gradvote_ypos = 0.57;  % (relative) y-position of gradient voting option parameters
+gradvote_ypos = 0.54;  % (relative) y-position of gradient voting option parameters
 uicontrol('Parent', hnhoodparampanel,'Style','text','Units',...
     'normalized','String','gradobjsize', 'FontWeight', 'bold', ...
     'HorizontalAlignment', 'left', 'Position',[0.02 gradvote_ypos 0.15 0.1]);
@@ -235,39 +259,39 @@ hgrthreshtext  = uicontrol('Parent', hnhoodparampanel,'Style','edit','Units', ..
 % hthreshoptinit = 
 uicontrol('Parent', hnhoodparampanel,'Style','text','Units',...
     'normalized','String','Threshold Option', 'FontWeight', 'bold', ...
-    'HorizontalAlignment', 'left', 'Position',[0.05 0.29 0.3 0.12]);
+    'HorizontalAlignment', 'left', 'Position',[0.05 0.32 0.3 0.12]);
 hthreshopt = uicontrol('Parent', hnhoodparampanel, 'Style','popupmenu', ...
     'String', '1. Intens. Thresh.|2. Std. Thresh.|3. Bright N', ...
-    'Units', 'normalized','Position', [0.05,0.16,0.3,0.12], ...
+    'Units', 'normalized','Position', [0.05,0.19,0.3,0.12], ...
     'Callback',{@threshopt_Callback});
 
 %hthreshtextinit1 = 
 uicontrol('Parent', hnhoodparampanel, 'Style','text',...
     'String','thr (0-1)', 'FontWeight', 'bold', 'Units', 'normalized',...
-    'Position',[0.38,0.32,0.13,0.1]);
+    'Position',[0.38,0.30,0.13,0.1]);
 defaultthresh1 = 0.99;
 hthresh1 = uicontrol('Parent', hnhoodparampanel, 'Style','slider', ...
     'Max', 0.99999, 'Min', 0.00, ...
     'SliderStep', [0.02 0.1], 'Units', 'normalized',...
-    'Value', defaultthresh1, 'Position', [0.7,0.32,0.27,0.1], ...
+    'Value', defaultthresh1, 'Position', [0.7,0.30,0.27,0.1], ...
     'Callback',{@thresh1_Callback});
 hthreshtext1  = uicontrol('Parent', hnhoodparampanel, 'Style','edit',...
     'Units', 'normalized', 'String', sprintf('%.4f', get(hthresh1, 'Value')), ...
-    'Position',[0.53,0.32,0.15,0.1], ...
+    'Position',[0.53,0.30,0.15,0.1], ...
     'Callback',{@threshtext1_Callback});
 %hthreshtextinit2 = 
 uicontrol('Parent', hnhoodparampanel, 'Style','text',...
     'String','thr (>1)', 'FontWeight', 'bold', 'Units', 'normalized',...
-    'Position',[0.38,0.17,0.13,0.1]);
+    'Position',[0.38,0.16,0.13,0.1]);
 defaultthresh2 = 3.0;
 hthreshtext2  = uicontrol('Parent', hnhoodparampanel, 'Style','edit',...
     'String', sprintf('%.1f', defaultthresh2), 'Units', 'normalized', ...
-    'Position',[0.53,0.17,0.15,0.1], ...
+    'Position',[0.53,0.16,0.15,0.1], ...
     'Callback',{@threshtext2_Callback});
 hthresh2 = uicontrol('Parent', hnhoodparampanel, 'Style','slider', ...
     'Max', 100, 'Min', 1, 'Value', defaultthresh2, ...
     'SliderStep', [0.01 0.10], 'Units', 'normalized',...
-    'Position', [0.7,0.17,0.27,0.1], ...
+    'Position', [0.7,0.16,0.27,0.1], ...
     'Callback',{@thresh2_Callback});
 defaultthresh3 = 3;
 %hthreshtextinit3 = 
@@ -285,32 +309,29 @@ hthresh3 = uicontrol('Parent', hnhoodparampanel, 'Style','slider', ...
     'Callback',{@thresh3_Callback});
 
 %% Displaying filtered and thresholded images
-hdispprocesspanel = uipanel('Title','Display Processed Imgs','FontSize',11,...
-'Units',  'normalized', 'Position',[.67 .46 .32 .1]);
+
+hdispprocesspanel = uipanel('Title','Display Processed Images','FontSize',11,...
+'Units',  'normalized', 'Position',[panelLeftPos .52 .32 .08]);
 % hdispimgText = 
 uicontrol('Parent', hdispprocesspanel, ...
-    'Style', 'text', 'String', 'Processed for finding maxima, not for fitting',...
+    'Style', 'text', 'String', 'For finding maxima, not for localization',...
     'FontAngle', 'italic', 'Units', 'normalized',...
     'HorizontalAlignment', 'left', 'Position',[0.05 0.7 0.9 0.3]);
 hdispprocess  = uicontrol('Parent', hdispprocesspanel,'Style','checkbox',...
     'String','DispProcess','Units', 'normalized', ...
-    'Position',[0.05, 0.2,0.3,0.4],'Value', 0,...
+    'Position',[0.05, 0.05,0.3,0.45],'Value', 0,...
     'Callback',{@dispprocess_Callback});
 hdispthreshprocess    = uicontrol('Parent', hdispprocesspanel,'Style','checkbox',...
     'String','DispThreshProcess','Units', 'normalized', ...
-    'Position',[0.4, 0.2,0.35,0.4],'Value', 0,...
+    'Position',[0.4, 0.05,0.35,0.45],'Value', 0,...
     'Callback',{@dispthreshprocess_Callback});
-% hdispwater = uicontrol('Parent',hdispprocesspanel,'Style','checkbox',...
-%     'String','DispWatershed','Units', 'normalized', ...
-%     'Position',[0.8, 0.2, 0.2, 0.4],'Value',0,...
-%     'Callback',{@dispwater_Callback});
 
 %% Tracking
 htrackpanel = uipanel('Title','Tracking','FontSize',11,...
-'Units',  'normalized', 'Position',[.67 .18 .32 .27]);
+'Units',  'normalized', 'Position',[panelLeftPos .23 .32 .27]);
 
 % Center-finding algorithm option
-ctrfinding_ypos = 0.8;
+ctrfinding_ypos = 0.83;
 uicontrol('Parent', htrackpanel, 'Style','text',...
     'String','Localiz. method', 'FontWeight', 'bold', 'Units', 'normalized',...
     'Position',[0.02,ctrfinding_ypos,0.23,0.12]);
@@ -321,96 +342,123 @@ hctrfitstr = uicontrol('Parent', htrackpanel, 'Style','popupmenu', ...
                      char(ctrfitstrarray(3)), ' | ', ...
                      char(ctrfitstrarray(4)), ' | ', ...
                      char(ctrfitstrarray(5))), ...
-    'Units', 'normalized','Position', [0.27,ctrfinding_ypos+0.01,0.2,0.12],...
+    'Units', 'normalized','Position', [0.27,ctrfinding_ypos,0.2,0.12],...
     'Value', 1, 'Callback',{@ctrfitstr_Callback});
 husenhoodctrs = uicontrol('Parent', htrackpanel,'Style','checkbox',...
     'String','Use prev. ctrs.','Fontweight', 'bold', 'Units', 'normalized', ...
-    'Position',[0.49, ctrfinding_ypos+0.01,0.28,0.12],'Value', 0);
+    'Position',[0.49, ctrfinding_ypos,0.28,0.12],'Value', 0);
 h1pernhood = uicontrol('Parent', htrackpanel,'Style','checkbox',...
     'String','1/nhood','Fontweight', 'bold', 'Units', 'normalized', ...
     'Position',[0.79, ctrfinding_ypos,0.19,0.12],'Value', 0);
 
 % Orientation-finding algorithm option
+orientation_ypos = 0.67;
 uicontrol('Parent', htrackpanel, 'Style','text',...
     'String','Orient. method', 'FontWeight', 'bold', 'Units', 'normalized',...
-    'Position',[0.02,0.65,0.23,0.12]);
+    'Position',[0.02,orientation_ypos,0.23,0.12]);
 orientstrarray = {'none', 'momentcalc'};
 horientstr = uicontrol('Parent', htrackpanel, 'Style','popupmenu', ...
     'String', strcat(char(orientstrarray(1)), ' | ',char(orientstrarray(2))), ...
-    'Units', 'normalized','Position', [0.27,0.65,0.2,0.12],...
+    'Units', 'normalized','Position', [0.27,orientation_ypos,0.2,0.12],...
     'Value', 1, 'Callback',{@orientstr_Callback});
 
 % Size-finding algorithm option (Tristan Hormel; for vesicle domains)
 uicontrol('Parent', htrackpanel, 'Style','text',...
     'String','Size method', 'FontWeight', 'bold', 'Units', 'normalized',...
-    'Position',[0.5,0.65,0.2,0.12]);
+    'Position',[0.5,orientation_ypos,0.2,0.12]);
 sizestrarray = {'none','bilateral_filter'};
 hsizestr = uicontrol('Parent',htrackpanel, 'Style','popupmenu', ...
     'String', strcat(char(sizestrarray(1)), ' | ', ...
                      char(sizestrarray(2))), ...
-    'Units', 'normalized','Position', [0.7 0.65 0.2 0.12],...
+    'Units', 'normalized','Position', [0.7 orientation_ypos 0.2 0.12],...
     'Value', 1, 'Callback',{@sizestr_Callback});
 
 % Tracking
+tracking_ypos = 0.53;
 htrackthisfr    = uicontrol('Parent', htrackpanel,'Style','pushbutton',...
     'String','Track this frame','Units', 'normalized',...
-    'Position',[0.05,0.47,0.3,0.12],'value', 0, ...
+    'Position',[0.02,tracking_ypos,0.25,0.12],'value', 0, ...
     'Callback',{@trackthisfr_Callback});
 htrackthisdone    = uicontrol('Parent', htrackpanel,'Style','checkbox',...
     'String','Done','Units', 'normalized',...
-    'Position',[0.4,0.47,0.3,0.12],'value', 0, ...
+    'Position',[0.29,tracking_ypos,0.12,0.12],'value', 0, ...
     'Callback',{@trackthisdone_Callback});
 htrackallfr    = uicontrol('Parent', htrackpanel,'Style','pushbutton',...
     'String','Track all frames','Units', 'normalized',...
-    'Position',[0.05,0.32,0.3,0.12],'value', 0, ...
+    'Position',[0.43,tracking_ypos,0.25,0.12],'value', 0, ...
     'Callback',{@trackallfr_Callback});
 htrackalldone    = uicontrol('Parent', htrackpanel,'Style','checkbox',...
     'String','Done','Units', 'normalized',...
-    'Position',[0.4,0.32,0.3,0.12],'value', 0, ...
+    'Position',[0.70,tracking_ypos,0.12,0.12],'value', 0, ...
     'Callback',{@trackalldone_Callback});
 hcleartracking    = uicontrol('Parent', htrackpanel,'Style','pushbutton',...
     'String','Clear','Units', 'normalized',...
-    'Position',[0.55,0.32,0.15,0.12],'value', 0, ...
+    'Position',[0.84,tracking_ypos,0.15,0.12],'value', 0, ...
     'Callback',{@cleartracking_Callback});
 
-linkopt_ypos = 0.15;
+linkopt_ypos = 0.32;
 uicontrol('Parent', htrackpanel,'Style','text','Units',...
     'normalized','String','Link MaxStep^2', 'FontWeight', 'bold', ...
-    'HorizontalAlignment', 'left', 'Position',[0.05 linkopt_ypos 0.25 0.12]);
+    'HorizontalAlignment', 'left', 'Position',[0.02 linkopt_ypos 0.25 0.12]);
 hlinksteptext  = uicontrol('Parent', htrackpanel,'Style','edit','Units', ...
-    'normalized', 'Position',[0.32, linkopt_ypos, 0.1, 0.12], 'String', '1000', ...
+    'normalized', 'Position',[0.29, linkopt_ypos, 0.1, 0.12], 'String', '1000', ...
     'Callback',{@linksteptext_Callback});
 uicontrol('Parent', htrackpanel,'Style','text','Units',...
     'normalized','String','Link Memory', 'FontWeight', 'bold', ...
-    'HorizontalAlignment', 'left', 'Position',[0.45 linkopt_ypos 0.2 0.12]);
+    'HorizontalAlignment', 'left', 'Position',[0.41 linkopt_ypos 0.2 0.12]);
 hlinkmemorytext  = uicontrol('Parent', htrackpanel,'Style','edit','Units', ...
-    'normalized', 'Position',[0.67, linkopt_ypos, 0.1, 0.12], 'String', '0', ...
+    'normalized', 'Position',[0.63, linkopt_ypos, 0.1, 0.12], 'String', '0', ...
     'Callback',{@linkmemorytext_Callback});
+link_ypos = 0.18;
 hlink    = uicontrol('Parent', htrackpanel,'Style','pushbutton',...
-    'String','Link Tracks','Units', 'normalized',...
-    'Position',[0.05,0.02,0.3,0.1],'value', 0, ...
+    'String','Link Objs -> Tracks','Units', 'normalized',...
+    'Position',[0.02,link_ypos,0.3,0.12],'value', 0, ...
     'Callback',{@link_Callback});
 hlinkdone    = uicontrol('Parent', htrackpanel,'Style','checkbox',...
     'String','Done','Units', 'normalized',...
-    'Position',[0.4,0.02,0.3,0.1],'value', 0, ...
+    'Position',[0.34,link_ypos,0.15,0.12],'value', 0, ...
     'Callback',{@linkdone_Callback});
+hNtracks = uicontrol('Parent', htrackpanel,'Style','text','Units',...
+    'normalized','String',[], ...
+    'HorizontalAlignment', 'left', 'Position',[0.51 link_ypos 0.16 0.12]);
 hclearlink = uicontrol('Parent', htrackpanel,'Style','pushbutton',...
     'String','Clear','Units', 'normalized',...
-    'Position',[0.55,0.02,0.15,0.1],'value', 0, ...
+    'Position',[0.69,link_ypos,0.15,0.12],'value', 0, ...
     'Callback',{@clearlink_Callback});
 
-hculllink = uicontrol('Parent', htrackpanel,'Style','pushbutton',...
-    'String','CullObjs','Units', 'normalized',...
-    'Position',[0.8,0.15,0.15,0.15],'value', 0, ...
-    'Callback',{@culllink_Callback});
-hunculllink = uicontrol('Parent', htrackpanel,'Style','pushbutton',...
-    'String','un-Cull','Units', 'normalized',...
-    'Position',[0.8,0.02,0.15,0.1],'value', 0, ...
-    'Callback',{@unculllink_Callback});
+% Culling objects or tracks
+cull_ypos = 0.02;
+uicontrol('Parent', htrackpanel,'Style','text','Units',...
+    'normalized','String','CullOption', 'FontWeight', 'bold', ...
+    'HorizontalAlignment', 'left', 'Position',[0.02 cull_ypos 0.16 0.12]);
+hcullOpt = uicontrol('Parent', htrackpanel, 'Style','popupmenu', ...
+    'String', 'None|Objects|Tracks|Undo|Revert', ...
+    'Units', 'normalized','Position', [0.2,cull_ypos,0.15,0.12]);
+hcull = uicontrol('Parent', htrackpanel,'Style','pushbutton',...
+    'String','Cull','Units', 'normalized',...
+    'Position',[0.37,cull_ypos,0.15,0.15],'value', 0, ...
+    'Callback',{@cull_Callback});
+
+%% De-drift -- for saving, not display; also velocity calculations
+hdedriftPanel = uipanel('Title','De-drift (save only, not display); Velocities','FontSize',11,...
+'Units',  'normalized', 'Position',[panelLeftPos .15 .32 .06]);
+hdeDriftDone    = uicontrol('Parent', hdedriftPanel,'Style','checkbox',...
+    'String','Done','Units', 'normalized',...
+    'Position',[0.02,0.02,0.25,0.8],'value', 0, ...
+    'Callback',{@deDriftDone_Callback});
+hdeDrift = uicontrol('Parent', hdedriftPanel,'Style','pushbutton',...
+    'String','De-Drift','Units', 'normalized',...
+    'Position',[0.3,0.02,0.3,0.8],'value', 0, ...
+    'Callback',{@deDrift_Callback});
+htempVelocity = uicontrol('Parent', hdedriftPanel,'Style','pushbutton',...
+    'String','TEMP velocities','Units', 'normalized',...
+    'Position',[0.7,0.02,0.25,0.8],'value', 0, ...
+    'Callback',{@tempVelocity_Callback});
+
 
 %% Save output, in a MAT file, or load previously calculated values
 hsavepanel = uipanel('Title','Save / Load','FontSize',11,...
-'Units',  'normalized', 'Position',[.67 .05 .32 .10]);
+'Units',  'normalized', 'Position',[panelLeftPos .05 .32 .08]);
 uicontrol('Parent', hsavepanel,'Style','pushbutton',...
     'String','Save output','Units', 'normalized',...
     'Position',[0.05,0.1,0.25,0.8],'value', 0, ...
@@ -434,7 +482,7 @@ hmsg    = uicontrol('Style','text','BackgroundColor', [1 1 0.7],...
 hdisptrackspanel = uipanel('Title','Display Tracks','FontSize',11,...
 'Units',  'normalized', 'Position',[.35 .05 .11 .15]);
 hdispcircles    = uicontrol('Parent', hdisptrackspanel,'Style','checkbox',...
-    'String','Show objs','Units', 'normalized', ...
+    'String','Show Objects','Units', 'normalized', ...
     'Position',[0.05, 0.6,0.8,0.25],'Value', 0,...
     'Callback',{@displayimage});
 hdispIDs    = uicontrol('Parent', hdisptrackspanel,'Style','checkbox',...
@@ -495,15 +543,32 @@ setprocessparam;
 
 objs = [];
 objs_link = [];
+objs_original = []; % to revert completely -- first objs matrix that contains all frames.
+objs_link_original = []; % to revert completely -- first objs_link matrix
 savedobjs = [];   % to revert if un-culling objects
-savedobjs_link = []; % to revert if un-culling objects
+savedobjs_link = []; % to revert if un-culling tracks
+objs_dedrift = []; % de-drifted linked object (objs_link) array, to save (not display);
+savedobjs_dedrift = []; % to revert if un-culling tracks
 
 % Other
 ctrfitstr = char(ctrfitstrarray(get(hctrfitstr,'Value')));
 orientstr = char(orientstrarray(get(horientstr,'Value')));
 sizestr = char(sizestrarray(get(hsizestr,'Value')));
 fitstr = {ctrfitstr; orientstr; sizestr};
-lsqoptions = optimset('lsqnonlin');
+if exist('optimset', 'file') && exist('lsqnonlin', 'file')
+    % use try / catch, since this still seems to lead to problems:
+    try
+        lsqoptions = optimset('lsqnonlin');
+    catch
+        warning('Problem assigning lsqoptions in TrackingGUI_rp.m; leave empty')
+        lsqoptions = []; % fine; see below
+    end
+else
+    % Optimization toolbox probably doesn't exist. Send fo5_rp an empty
+    % options variable, which will only cause problems if non-linear least
+    % squares fitting is used.
+    lsqoptions = [];
+end
 linkstep = round(str2double(get(hlinksteptext,'string')));
 linkmem =  round(str2double(get(hlinkmemorytext,'string')));
 
@@ -552,12 +617,8 @@ currframe = frmin;  % # of the current (primary) frame
 % Show filtered, thresholded image
 showprocess = false;
 showthreshprocess = false;
-% showwatershed = false;
-showbilateralfilter = false;
 processedA = [];  % filtered image
 threshprocessA = [];  % thresholded, filtered image
-markedA = [];
-bilateralA = [];
 
 cd(programdir); % Go back to the directory from which the GUI was called
 
@@ -568,6 +629,7 @@ im1 = [];  % handle to primary image display
 % Status variables
 trackthisdone = false(Nframes,1);  % true for frames that have been segmented
 islinkdone = false;  % is linkage of objects into tracks done?
+isdeDriftDone = false; % is there a de-drifted object array?
 
 % necessary?
 colormap('gray');
@@ -577,26 +639,27 @@ outfile = [];  % file name for saving results (MAT file)
 % Creates axes on the figure. At a later time in the program these axes will
 % be filled with the images we are analyzing.
 imageRelHeight = 0.78;
-imageRelWidth = size(A, 2)/size(A,1)*imageRelHeight;
-axeshandle = axes('Position', [0.01 0.22 imageRelWidth imageRelHeight]);
+imageRelWidth = min([levelLeftPos size(A, 2)/size(A,1)*imageRelHeight]); % can't be larger than Levels panel position.
+axeshandle = axes(fGUI, 'Units', 'normalized', 'Position', [0.01 0.21 imageRelWidth imageRelHeight]);
 
 %Creating a table where the information about the cell we click on is
 %displayed.
 selectedobjectdata = cell(6,1);
-t = uitable('Parent', fGUI, 'Units', 'normalized','Position',...
+cell_table = uitable('Parent', fGUI, 'Units', 'normalized','Position',...
    [0.01 0.05 0.2 0.15]);
-set(t, 'ColumnName', []);
-set(t, 'RowName',{ 'Centroid x',  'Centroid y', 'Brightness',...
+set(cell_table, 'ColumnName', []);
+set(cell_table, 'RowName',{ 'Centroid x',  'Centroid y', 'Brightness',...
     'Particle ID', 'Frame no.', 'Track ID', 'Sigma', 'mean d^2'});
-set(t, 'Data', selectedobjectdata);
-align([t axeshandle], 'Fixed',100,  'Top');
+set(cell_table, 'Data', selectedobjectdata);
+align([cell_table axeshandle], 'Fixed',100,  'Top');
 
 % Move the GUI to the center of the screen.
 movegui(fGUI,'center')
 % Make the GUI visible.
 set(fGUI,'Visible','on');
-set([htrackthisfr, htrackallfr, hlink, hculllink, hunculllink, ...
-    hexit, hmsg], 'BackgroundColor',[0.85 1.0 0.6]);
+% Green colored buttons
+set([htrackthisfr, htrackallfr, hlink, hcull, hdeDrift], 'BackgroundColor',[0.85 1.0 0.6]);
+% Orange buttons
 set([hcleartracking, hclearlink], 'BackgroundColor',[1.0 0.7 0.4]);
 set([hexit, hmsg], 'BackgroundColor',[1.0 0.5 0.2]);
 
@@ -620,7 +683,7 @@ displayimage
 
     function exit_Callback(source,eventdata)
         % Exit
-        close all
+        close(fGUI);
     end
 
 % Callback functions for loading and displaying frames
@@ -663,8 +726,12 @@ displayimage
             % Don't do any calculations or updates
             % Note that all file names were determined previously
             if ~ismultipage
-                framestr = sprintf(formatstr, currframe);
-                A  = imread(strcat(fbase, framestr, ext));
+                if Nframes==1
+                    A = imread(fbase);
+                else
+                    framestr = sprintf(formatstr, currframe);
+                    A  = imread(strcat(fbase, framestr, ext));
+                end
             else
                 % multipage TIFF
                 A  = imread(strcat(fbase, ext), currframe);
@@ -683,12 +750,6 @@ displayimage
         end
         if showthreshprocess
             threshprocessA = calcthreshprocess;
-        end
-%         if showwatershed
-%             markedA = calcmarkers;
-%         end
-        if showbilateralfilter
-            bilateralA = calcbilateralfilter;
         end
     end
 
@@ -1062,37 +1123,6 @@ displayimage
         threshprocessA = processedA.*threshprocessAmask;
     end
 
-    function markedA = calcmarkers
-        %calculate foreground and background markers
-        %bwA = calcthreshprocess;
-        %[ L, bgm, fgm4 ] = DomainWatershed( fixedA, 2, 3 );
-        if islinkdone
-            objsthisframe = objs_link(:,objs_link(5,:)==currframe-frmin+1);
-        else
-            objsthisframe = objs(:,objs(5,:)==currframe-frmin+1);
-        end
-        [ L, fgm, bgm ] = DomainWatershed( double(A), objsthisframe );
-        markedA = A;
-        markedA(L==0 | bgm | fgm) = 50;
-        %markedA(imdilate(L==0,ones(3,3)) | fgm4) = 255;
-        %markedA(imdilate(L==0,ones(3,3))) = 255;
-        %markedA(fgm4) = 255;
-        %markedA(bgm | fgm4 ) = 255;
-        %         markedA(bgm) = 500;
-    end
-
-    function bilateralA = calcbilateralfilter
-        if islinkdone
-            objsthisframe = objs_link(:,objs_link(5,:)==currframe-frmin+1);
-        else
-            objsthisframe = objs(:,objs(5,:)==currframe-frmin+1);
-        end
-        A = img/max(max(A));
-        B = bfilter2(A, 5, [3, .1]); %default values from bpfilter2
-        bw = im2bw(B,graythresh(B));
-        bilateralA(bw) = max(max(A));
-    end
-
     function updateprocessandthresh
         % calls functions to recalculate filtered and post-threshold
         % images, and display
@@ -1102,12 +1132,6 @@ displayimage
         if showthreshprocess
             threshprocessA = calcthreshprocess;
         end
-%         if showwatershed
-%             markedA = calcmarkers;
-%         end
-        if showbilateralfilter
-            bilateralA = calcbilateralfilter;
-        end
         displayimage
     end
 
@@ -1116,7 +1140,6 @@ displayimage
         if showprocess
             processedA = calcprocessimg;  % calculate, even if processedA isn't empty, in case parameters have changed
             set(hdispthreshprocess, 'Value', false);  % turn off the other checkbox
-%             set(hdispwater, 'Value', false);
         end
         displayimage;
     end
@@ -1130,17 +1153,6 @@ displayimage
             processedA = calcprocessimg;
             threshprocessA = calcthreshprocess;
             set(hdispprocess, 'Value', false);  % turn off the other checkbox
-%             set(hdispwater, 'Value', false);
-        end
-        displayimage;
-    end
-
-    function dispwater_Callback(hObject, source, eventdata)
-        showwatershed = get(hObject, 'Value');
-        if showwatershed
-            markedA = calcmarkers;
-            set(hdispprocess, 'Value', false);
-            set(hdispthreshprocess,'Value', false);
         end
         displayimage;
     end
@@ -1158,24 +1170,29 @@ displayimage
         trackthisdone(currframe-frmin+1) = true;  % note that tracking has been done
         savedobjs = objs;  % saved, in case culling and un-culling are done.
         set(htrackthisdone, 'Value', trackthisdone(currframe-frmin+1));
-        set(hmsg, 'String', 'Tracking completed!');
+        set(hmsg, 'String', 'Tracking of this frame completed!');
     end
 
-    function [] = trackthisdone_Callback(hObject, eventdata, handles)
+    function trackthisdone_Callback(hObject, eventdata, handles)
         % Don't do anything if the user clicks the "tracking done" 
         % checkbox, reset its value to whatever the true array value is.
         set(htrackthisdone, 'Value', trackthisdone(currframe-frmin+1));
     end
 
-    function [] = trackallfr_Callback(hObject, eventdata, handles)
+    function trackallfr_Callback(hObject, eventdata, handles)
         % Track all frames
         set(hmsg, 'String', 'Tracking of all images started...'); 
         pause(0.02);  % does this help the display issue?
-        disp('Tracking of all images started...')
 
         progtitle = sprintf('TrackingGUI: Tracking using fo5_rp.m ...  '); 
+        % Convoluted use of "children" to allow the underscore in the
+        % waitbar title...
+        progbar = waitbar(0, 'Temporary');
+        progbar.Children.Title.Interpreter = 'none';
+           % double underscore to stop one from being read as subscript by
+           % waitbar.
         if (Nframes > 1)
-            progbar = waitbar(0, progtitle);  % will display progress
+            progbar = waitbar(0, progbar, progtitle);  % will display progress
         end
         objs = [];
         oldA = A;
@@ -1210,7 +1227,7 @@ displayimage
             % show progress -- not called if just one frame
             if mod(j-frmin+1,10)==0
                 waitbar((j-frmin+1)/Nframes, progbar, ...
-                    strcat(progtitle, sprintf('frame %d of %d', (j-frmin+1), Nframes)));
+                    strcat(progtitle, sprintf('frame %d of %d', (j-frmin+1), Nframes)), 'Interpreter','none');
             end
             trackthisdone(j-frmin+1) = true;  % note that tracking has been done
         end
@@ -1221,18 +1238,23 @@ displayimage
         end
         savedobjs = objs;  % saved, in case culling and un-culling are done.
         set(htrackthisdone, 'Value', trackthisdone(currframe-frmin+1));
-        set(htrackalldone, 'Value', sum(trackthisdone)==length(trackthisdone));
+        if sum(trackthisdone)==length(trackthisdone)
+            % All frames have been tracked
+            set(htrackalldone, 'Value', true);
+            if isempty(objs_original)
+                objs_original = objs; % This is the first objs matrix; save if we want to revert
+            end
+        end
         set(hmsg, 'String', 'Tracking of all frames completed!');
-        disp('Tracking of all frames completed!')
     end
 
-    function [] = trackalldone_Callback(hObject, eventdata, handles)
+    function trackalldone_Callback(hObject, eventdata)
         % Don't do anything if the user clicks the  
         % checkbox, reset its value to what it should be
         set(htrackalldone, 'Value', sum(trackthisdone)==length(trackthisdone));
     end
 
-    function [] = cleartracking_Callback(hObject, eventdata, handles)
+    function  cleartracking_Callback(hObject, eventdata)
         % Clear all the tracking output, and the linking output
         objs = [];
         objs_link = [];
@@ -1244,16 +1266,16 @@ displayimage
         set(hmsg, 'String', 'Cleared tracking output for all frames');
     end
 
-% Parameters for linking
-
-    function  [] = link_Callback(hObject, eventdata, handles)
-        
+    function  link_Callback(hObject, eventdata)
         % Linking objects into trajectories, using nnlink_rp
         set(hmsg, 'String', 'Linking tracks ...');
         disp('Linking tracks ...')
         
         if sum(trackthisdone)==length(trackthisdone)
             objs_link = nnlink_rp(objs, linkstep, linkmem, true);
+            if isempty(objs_link_original)
+                objs_link_original = objs_link; % the first linked object matrix, in case we want to revert
+            end
             set(hmsg, 'String', 'Linking done ...');
             islinkdone = true;
             savedobjs_link = objs_link;  % saved, in case culling and un-culling are done.
@@ -1261,10 +1283,12 @@ displayimage
             % All frames need to be tracked before linking!
             set(hmsg, 'String', 'All frames need to be tracked before linking!');
         end
+        % Display number of tracks
+        set(hNtracks, 'String', sprintf('%d tracks', length(unique(objs_link(6,:)))));
         set(hlinkdone, 'Value', islinkdone);
     end
 
-    function [] = linkdone_Callback(hObject, eventdata, handles)
+    function linkdone_Callback(hObject, eventdata, handles)
         % Don't do anything if the user clicks the "link done" 
         % checkbox, reset its value to whatever the true array value is.
         set(hlinkdone, 'Value', islinkdone);
@@ -1280,46 +1304,247 @@ displayimage
         linkmem = round(str2double(get(source,'string')));
     end
 
-    function [] = clearlink_Callback(hObject, eventdata, handles)
+    function clearlink_Callback(hObject, eventdata)
         % Clear the linkages; keep objs matrix
         objs_link = [];
         islinkdone = false;
         set(hlinkdone, 'Value', islinkdone);
+        set(hNtracks, 'String', []);
         set(hmsg, 'String', 'Cleared linkage of tracks');
     end
 
-    function [] = culllink_Callback(hObject, eventdata, handles)
-        % Cull objects from the objs or objs_link matrix based on histogram of object
-        % width and histogram of gradient-line-distance, using cullobjs.m
-        % If linking is done, apply to both objs and objs_link arrays; if
-        % not apply to objs only
-        prompt = {strcat('cullobjects.m:  Enter cutoffs for sigma, dmin as # std. above median,', ...
-                   'separated by a space; leave empty for defaults;', ...
-                   '-1 for input based on histograms'), ...
-            'culling method: "rect" for rectangular cut in sigma/dmin space, "diag" for diagonal'};
-        dlg_title = 'Culling parameters option'; num_lines= 1;
-        def     = {num2str(-1), 'diag'};  % default values
-        answer  = inputdlg(prompt,dlg_title,num_lines,def);
-        cutoffs = str2num(char(answer(1)));
-        culloption = char(answer(2));
-        if islinkdone
-            [objs sigmamaxstd dmaxstd] = cullobjects(objs, cutoffs, culloption);
-            objs_link = cullobjects(objs_link, [sigmamaxstd dmaxstd], culloption);
-        else
-            objs = cullobjects(objs, cutoffs, culloption);
+    function cull_Callback(hObject, eventdata)
+        % Perform Culling of either objects or tracks.
+        % Options (from Menu, hcullOpt):
+        % 1: Nothing
+        % 2: Cull objects from the objs or objs_link matrix based on histogram of object
+        %    width and histogram of gradient-line-distance, using cullobjs.m
+        %    If linking is done, apply to both objs and objs_link arrays; if
+        %    not apply to objs only
+        % 3: Cull tracks from objs_link, based on criteria such as standard
+        %    deviation, track length, etc. 
+        %    Does not change objs, only objs_link
+        %    Optional: can de-drift first: de-drift, then cull tracks, then
+        %    un-drift. Code is redundantly lifted from cullTracksGUI.m
+        %    Also saves the dedrifted & culled matrix (objs_dedrift), which
+        %    can be output.
+        %    Uses cullTracks_function.m, and dedrift_rp.m
+        % 4: Undo -- revert to previous objs, objs_link
+        % 5: Revert to Original -- revert to original objs, objs_link (the
+        %    first non-empty arrays)
+        
+        cullOption = get(hcullOpt, 'Value');
+        switch cullOption
+            case 1
+                % Nothing
+                set(hmsg, 'String', 'No culling performed; see menu.');
+            case 2
+                % Cull objects.
+                prompt = {strcat('cullobjects.m:  Enter cutoffs for sigma, dmin as # std. above median,', ...
+                    'separated by a space; leave empty for defaults;', ...
+                    '-1 for input based on histograms'), ...
+                    'culling method: "rect" for rectangular cut in sigma/dmin space, "diag" for diagonal'};
+                dlg_title = 'Culling parameters option'; num_lines= 1;
+                def     = {num2str(-1), 'diag'};  % default values
+                answer  = inputdlg(prompt,dlg_title,num_lines,def);
+                cutoffs = str2num(char(answer(1)));
+                culloption = char(answer(2));
+                savedobjs = objs; % save, for Undo button (probably redundant)
+                savedobjs_link = objs_link; % save, for Undo button (probably redundant)
+                if islinkdone
+                    initialNobjects = length(unique(objs_link(4,:)));
+                    [objs, sigmamaxstd, dmaxstd] = cullobjects(objs, cutoffs, culloption);
+                    objs_link = cullobjects(objs_link, [sigmamaxstd dmaxstd], culloption);
+                    length(unique(objs_link))
+                    finalNobjects = length(unique(objs_link(4,:)));
+                else
+                    initialNobjects = length(unique(objs(4,:)));
+                    objs = cullobjects(objs, cutoffs, culloption);
+                    finalNobjects = length(unique(objs(4,:)));
+                end
+                set(hmsg, 'String', sprintf('Objects culled: %d to %d', ...
+                    initialNobjects, finalNobjects));
+            case 3
+                % Cull Tracks (requires linkage to be done)
+                if islinkdone
+                    savedobjs = objs; % save, for Undo button (probably redundant)
+                    savedobjs_link = objs_link; % save, for Undo button (probably redundant)
+                    savedobjs_dedrift = objs_dedrift; % save, for Undo button (probably redundant)
+                    
+                    % If de-drifting has been previously performed, ask if
+                    % this culling should be calculated using the
+                    % de-drifted positions or the (un-dedrifted) objs_link
+                    if isdeDriftDone
+                        cull_whichMatrixName = questdlg('Calculate using positions from...', ...
+                            'whichMatrix', 'objs_link', 'objs_dedrift', 'objs_link'); % last item is default
+                    else
+                        cull_whichMatrixName = 'objs_link';
+                    end
+                    switch cull_whichMatrixName
+                        case 'objs_link'
+                            objs_toCull = objs_link;
+                        case 'objs_dedrift'
+                            objs_toCull = objs_dedrift;
+                        otherwise
+                            objs_toCull = [];
+                            set(hmsg, 'String', 'Error in culling: invalid matrix');
+                    end
+                    % objs_toCull is the object matrix for which to
+                    % calculate culling
+                        
+                    % Ask if we should de-drift this object matrix before culling:
+                    answerDeDrift = questdlg(strcat('De-drift [', cull_whichMatrixName, ...
+                        '] positions before culling?'), 'De-drift', 'Yes', 'No', 'No');  % last item is default
+                    firstDeDrift = strcmpi(answerDeDrift, 'yes');
+                    
+                    if firstDeDrift
+                        % De-drift whatever array we're using before culling tracks
+                        objs_toCull = dedrift_function(objs_toCull);
+                        isdeDriftDone = true;
+                        deDriftdone_Callback;  % update checkbox
+                    end
+                    
+                    % Culling options
+                    initialNtracks = length(unique(objs_toCull(6,:)));
+                    cullOptionStrings = {'StdDev', 'TrackLength', ...
+                        'Straightness', 'Angle', 'StepSpeed'};
+                    cullOptionIdx = listdlg('ListString', cullOptionStrings, ...
+                        'SelectionMode', 'single');
+                    
+                    % Cull tracks
+                    objs_culled = cullTracks_function(objs_toCull, char(cullOptionStrings(cullOptionIdx)));
+                    finalNtracks = length(unique(objs_culled(6,:)));
+                                        
+                    % Un-dedrift, if necessary, by removing the culled
+                    % tracks from objs_link (the linked object matrix)
+                    % regardless of what matrix was used to calculate culling.
+                    % Also update prior de-drifted matrix
+                    currentIDs = unique(objs_culled(6,:)); % current unique track IDs
+                    if firstDeDrift
+                        objs_dedrift = objs_culled;
+                        objs_link = objs_link(:,ismember(objs_link(6,:), currentIDs));
+                    else
+                        % we didn't dedrift, so objs_link is the culled
+                        % matrix if we used objs_link to calculate...
+                        switch cull_whichMatrixName
+                            case 'objs_link'
+                                objs_link = objs_culled;
+                                if isdeDriftDone
+                                    % update (prior) de-drifted matrix
+                                    objs_dedrift = objs_dedrift(:,ismember(objs_dedrift(6,:), currentIDs));
+                                end
+                            case 'objs_dedrift'
+                                % ... and if not, we update objs_link based on what
+                                % has been culled from objs_dedrift   
+                                objs_dedrift = objs_culled;
+                                objs_link = objs_link(:,ismember(objs_link(6,:), currentIDs));
+                            otherwise
+                                objs_link = [];
+                                set(hmsg, 'String', 'Error in culling: invalid matrix name');
+                        end
+                    end
+                    set(hNtracks, 'String', sprintf('%d tracks', length(unique(objs_link(6,:)))));        
+                    set(hmsg, 'String', sprintf('Tracks culled: %d to %d', ...
+                        initialNtracks, finalNtracks));
+                else
+                    set(hmsg, 'String', 'Linkage must be done before tracks can be culled');
+                end
+            case 4
+                % Undo
+                objs = savedobjs;
+                objs_link = savedobjs_link; 
+                objs_dedrift = savedobjs_dedrift;
+                if isempty(savedobjs_dedrift)
+                    % we haven't de-drifted ever
+                    isdeDriftDone = false;
+                    deDriftdone_Callback; % set checkbox
+                end
+                set(hNtracks, 'String', sprintf('%d tracks', length(unique(objs_link(6,:)))));        
+                set(hmsg, 'String', 'Culling Undone');
+            case 5
+                % Revert to Original
+                objs = objs_original;
+                objs_link = objs_link_original;
+                objs_dedrift = [];
+                isdeDriftDone = false;
+                deDriftdone_Callback; % set checkbox
+                set(hNtracks, 'String', sprintf('%d tracks', length(unique(objs_link(6,:)))));        
+                set(hmsg, 'String', 'Revert to original objs, objs_link');
+            otherwise
+                set(hmsg, 'String', 'Bad Culling Option: No action');
         end
-        set(hmsg, 'String', 'Objects culled');
     end
 
-    function [] = unculllink_Callback(hObject, eventdata, handles)
-        % Undo culling by reverting to saved matrices
-        objs = savedobjs;
-        objs_link = savedobjs_link;
-        set(hmsg, 'String', 'Culling undone');
+%% De-drift
+
+    function deDrift_Callback(hObject, eventdata)
+        % calculate a "de-drifted" linked object array, using dedrift_rp.m
+        % Implicit input is objs_link and output is objs_dedrift, both
+        % spanning many functions. Unfortunately Callbacks don't allow
+        % output! Because we will want to alter what array we're
+        % de-drifting, have this call another function (dedrift_function)
+        set(hmsg, 'String', 'De-drifting ...');
+        if ~islinkdone
+            set(hmsg, 'String', 'ERROR: De-drift requires a linked object matrix');
+        else
+            objs_dedrift = dedrift_function(objs_link);
+            isdeDriftDone = true;
+            set(hmsg, 'String', 'De-drifting done (not displayed).');
+        end
+        set(hdeDriftDone, 'Value', isdeDriftDone);
+    end
+
+    function objs_dedrift_FROM_FCN = dedrift_function(objs_link_FROM_FCN)
+        % call dedrift_rp.m to de-drift, first asking for input parameters
+        % Dialog box for parameters
+        prompt = {'Calculaton method  (1 == mean shift; 2 == median shift; 3 == linear pos dependent):', ...
+            'Application method  (1 == frame-by-frame; 2 == average over all frames):'};
+        dlg_title = 'De-drift parameters'; num_lines= 1;
+        def     = {num2str(2), num2str(1)};  % default values
+        answer  = inputdlg(prompt,dlg_title,num_lines,def);
+        calcMethod = str2num(char(answer(1)));
+        applyMethod = str2num(char(answer(2)));
+        % de-drift
+        objs_dedrift_FROM_FCN = dedrift_rp(objs_link_FROM_FCN, calcMethod, applyMethod, false);
+    end
+        
+    function deDriftdone_Callback(hObject, eventdata)
+        % Don't do anything if the user clicks the "dedrift done" 
+        % checkbox. Reset its value to whatever the true array value is.
+        set(hdeDriftDone, 'Value', isdeDriftDone);
+    end
+
+    function tempVelocity_Callback(hObject, eventdata)
+        % placeholder for better track velocity analysis
+        % simply call trackveldist.m; display; don't integrate with this
+        % GUI. User input for frame rate, etc.
+        waitfor(warndlg('Simply calls trackveldist.m; no integration with GUI; nothing saved; display to screen.'))
+        if isdeDriftDone
+            trackveldist_whichMatrixName = questdlg('Calculate using positions from...', ...
+                'whichMatrix', 'objs_link', 'objs_dedrift', 'objs_dedrift'); % last item is default
+        else
+            trackveldist_whichMatrixName = 'objs_link';
+        end
+        % Parameters (dialog box)
+        prompt = {'binsize (number of frames over which to fit velocity)', ...
+            'image scale (um/px)', 'frame rate (frames per second)'};
+        dlg_title = 'For trackveldist.m'; num_lines= 1;
+        def     = {num2str(5), num2str(0.1625), num2str(30.0)};  % default values
+        answer  = inputdlg(prompt,dlg_title,num_lines,def);
+        binsize = str2num(char(answer(1)));
+        vscale = str2num(char(answer(2)))*str2num(char(answer(3)));
+        switch trackveldist_whichMatrixName
+            case 'objs_link'
+                trackveldist(objs_link, binsize, true, vscale);
+            case 'objs_dedrift'
+                trackveldist(objs_dedrift, binsize, true, vscale);
+            otherwise
+                set(hmsg, 'String', 'Error in calling trackveldist');
+        end
     end
 
 %% Save output, or load previous calc. values
-    function [] = saveoutput_Callback(hObject, eventdata, handles)
+    function [] = saveoutput_Callback(hObject, eventdata)
         % Save results in a MAT file
         % Dialog box for name
         prompt = {'Output File Name (*include* ".mat")'};
@@ -1333,14 +1558,14 @@ displayimage
         outfile = char(answer(1));
         if ~isempty(outfile)
             set(hmsg, 'String', 'Starting to save variables...');
-            save(outfile, 'Nframes', 'objs', 'objs_link', 'threshopt', ...
-                'thresh', 'processopt', 'processparam', ...
-                'trackthisdone', 'islinkdone');  % Save these variables
+            save(outfile, 'Nframes', 'objs', 'objs_link', 'objs_dedrift',  ...
+                'threshopt', 'thresh', 'processopt', 'processparam', ...
+                'trackthisdone', 'islinkdone', 'isdeDriftDone');  % Save these variables
             set(hmsg, 'String', 'Done saving variables.');
         end
     end
 
-    function [] = savetxt_Callback(hObject, eventdata, handles)
+    function [] = savetxt_Callback(hObject, eventdata)
         % Save results in a simple text file; positions only
         % Dialog box for name
         if islinkdone
@@ -1374,116 +1599,179 @@ displayimage
         end
     end
 
-    function [] = loadoutput_Callback(hObject, eventdata, handles)
-        % Load obj data from previously saved MAT file
-        % Dialog box for name
-        prompt = {'Input File Name (*include* ".mat")'};
-        dlg_title = 'Load output'; num_lines= 1;
+    function [] = loadoutput_Callback(hObject, eventdata)
+        % Load object data from previously saved MAT file. First load the
+        % contents of the file into a structured array. Then use this to
+        % set the defaults for the variable names that the user wants.
+        % Write various things to the edit window, esp. if there are variables
+        %   that weren't saved
+        % Get file name:
         if isempty(outfile)
-            def     = {'TrackGUIoutput.mat'};  % default value
+            defaultFilename     = 'TrackGUIoutput.mat';  % default value
         else
-            def     = {outfile};  % default value
+            defaultFilename     = outfile;  % default value
         end
-        answer  = inputdlg(prompt,dlg_title,num_lines,def);
-        infile = char(answer(1));
-        if ~isempty(infile)
-            S = load(infile);  % Load variables into a structure
-            % -- necessary since this is a nested function
-            % if Nframes is not saved, figure this out from range of row 5
-            % in object matrix
-            if ~isfield(S,'Nfames')
-                S.Nframes = max(S.objs(5,:))-min(S.objs(5,:))+1;
-            end
-            if S.Nframes ~= Nframes
-                set(hmsg, 'String', 'ERROR!  Number of frames is different');
-                warndlg('Warning: Number of frames is inconsistent.');
-                pause(2)
+        [inputMATfilename, inputMATpath] = ...
+            uigetfile('*.mat', 'MAT file from which to load object data', defaultFilename);
+        if ~isempty(inputMATfilename)
+            S = load(strcat(inputMATpath, inputMATfilename));  % Load variables into a structure
+            % Dialog box for file name
+            dlg_title = 'Load variables'; num_lines= 1;
+            prompt = {'Variable name to assign to objs_link (empty for none)'};
+            if isfield(S, 'objs_link_unDeDrifted')
+                def     = {'objs_link_unDeDrifted'};  % default value for array to import
             else
-                % reassign the variables!
-                objs = S.objs;
-                objs_link = S.objs_link;
-                threshopt = S.threshopt;
-                thresh = S.thresh;
-                if isfield(S, 'processopt')
-                    processopt = S.processopt;
-                    processparam = S.processparam;
-                else
-                    % older version -- only spatial filtering as a
-                    % processing option
-                    processopt = 'spatialfilter';  % spatial filtering
-                    if isfield(S, 'bpfiltsize')
-                        processparam = [S.bpfiltsize S.nsize];
-                    else
-                        % even older version: one "objsize" variable
-                        % instead of two for bpfiltsize and nsize
-                        processparam = S.objsize*[1 1];
-                    end
-                end
-                if isfield(S, 'islinkdone')
-                    islinkdone = S.islinkdone;
-                else
-                    % field doesn't exist; guess from row 6
-                    islinkdone = min(objs_link(6,:))>0;
-                end
-                if isfield(S, 'trackthisdone')
-                    trackthisdone = S.trackthisdone;
-                else
-                    % field doesn't exist; guess from row 4 for each frame
-                    utr_temp = unique(objs(5,:));
-                    trackthisdone = false(Nframes,1);
-                    for kk = 1:length(utr_temp)
-                        trackthisdone(kk) = min(objs(4,(objs(5,:)==utr_temp(kk))))>0;
-                    end
-                end
-                % update the filtered images, if these are being displayed
-                updateprocessandthresh;
-                set(hmsg, 'String', 'Done loading variables.');
-                % set sliders and checkboxes
-                set(hprocessopt, 'Value', find(strcmp(processoptarray,processopt)));
-                switch processopt
-                    case 'spatialfilter'
-                        % Spatial filtering
-                        set(hbpfiltsize, 'Value', processparam(1));
-                        set(hbpfiltsizetext, 'String', sprintf('%d', processparam(1)));
-                        set(hnsize, 'Value', processparam(2));
-                        set(hnsizetext, 'String', sprintf('%d', processparam(2)));
-                    case 'gradientvote'
-                        % Gradient voting
-                        set(hgrobjsize, 'Value', processparam(1));
-                        set(hgrobjsizetext, 'String', sprintf('%d', processparam(1)));
-                        set(hgraddiropt, 'Value', processparam(2));
-                        set(hgrthreshtext, 'String', sprintf('%.3f', processparam(3)));
-                    case 'none'
-                        set(hbpfiltsize, 'Value', processparam(1));
-                        set(hbpfiltsizetext, 'String', sprintf('%d', processparam(1)));
-                end
-                % Call processopt_Callback, just to set highlights color of
-                % buttons
-                processopt_Callback
-                set(htrackthisdone, 'Value', trackthisdone(currframe-frmin+1));
-                switch threshopt
-                    case 1
-                        set(hthresh1,'Value', thresh);
-                        set(hthreshtext1, 'String', sprintf('%.4f', thresh));
-                    case 2
-                        set(hthresh2,'Value',-thresh);
-                        set(hthreshtext2, 'String', sprintf('%.4f', -thresh));
-                    case 3
-                        set(hthresh3,'Value',thresh);
-                        set(hthreshtext3, 'String', sprintf('%d', thresh));
-                end
-                set(hthreshopt, 'Value', threshopt);
-                threshopt_Callback; % set the shading, etc.; a bit redundant
-                set(htrackalldone, 'Value', sum(trackthisdone)==length(trackthisdone));
-                set(hlinkdone, 'Value', islinkdone);  % update linkage variable
+                def     = {'objs_link'};  % default value
             end
+            answer  = inputdlg(prompt,dlg_title,num_lines,def);
+            objs_link_VariableName = char(answer(1));
+            
+            % -- necessary since this is a nested function
+            % Note that we're assuming the MAT file was saved from an
+            % analysis of the same set of images.
+            % A rough check of this by examining row 5
+            % in the object matrix, or the linked object matrix, and
+            % comparing to Nframes. If they don't match, it may still be
+            % fine, e.g. if frames have been deleted from a culled object
+            % matrix. Nframes shouldn't be *higher* than the original,though!
+            if ~isfield(S,'Nframes')
+                if isfield(S,'objs')
+                    S.Nframes = max(S.objs(5,:))-min(S.objs(5,:))+1;
+                else
+                    % Look at objs_link; hopefully it exists!
+                    S.Nframes = max(S.objs_link(5,:))-min(S.objs_link(5,:))+1;
+                end
+            end
+            if S.Nframes > Nframes
+                set(hmsg, 'String', 'ERROR! Number of frames is too large; possibly wrong dataset?!');
+                warndlg('Warning: Number of frames is too large!');
+                pause(1)
+            elseif S.Nframes < Nframes
+                set(hmsg, 'String', 'Warning: Number of frames is smaller; culled data?');
+                warndlg('Warning: Number of frames is smaller; culled data?');
+            end
+            % reassign the variables!
+            % The linked object array (objs_link) is likely to be the 
+            % omost important, imported, after culling tracks, for example.
+            % Start with this. If empty, linking hasn't been done.
+            if ~isempty(objs_link_VariableName)
+                objs_link = S.(objs_link_VariableName);
+            end
+            if isfield(S,'objs')
+                objs = S.objs;
+            elseif isfield(S,'objs_link')
+                disp('NOTE: objs doesn''t exist in loaded MAT file; use objs_link.')
+                objs = S.objs_link;
+            else
+                disp('NOTE: objs doesn''t exist in loaded MAT file ...')
+                if isempty(objs)
+                    % objs hasn't been calculated. Use objs_link for objs
+                    disp('   ... use objs_link for objs')
+                    objs = objs_link;
+                else
+                    disp('   ... use existing objs')
+                end
+            end
+            if isfield(S,'objs_dedrift')
+                objs_dedrift = S.objs_dedrift; % de-drifted linked object matrix
+                isdeDriftDone = true;
+            else
+                objs_dedrift = [];
+                isdeDriftDone = false;
+            end
+            deDriftdone_Callback;
+            if isfield(S,'threshopt')
+                threshopt = S.threshopt;
+            else
+                disp('NOTE: threshopt doesn''t exist in loaded MAT file; use original.')
+            end
+            if isfield(S,'thresh')
+                thresh = S.thresh;
+            else
+                disp('NOTE: thresh doesn''t exist in loaded MAT file; use original.')
+            end
+            if isfield(S, 'processopt')
+                processopt = S.processopt;
+                processparam = S.processparam;
+            else
+                % older version -- only spatial filtering as a
+                % processing option
+                processopt = 'spatialfilter';  % spatial filtering
+                if isfield(S, 'bpfiltsize')
+                    processparam = [S.bpfiltsize S.nsize];
+                elseif isfield(S, 'objsize')
+                    % even older version: one "objsize" variable
+                    % instead of two for bpfiltsize and nsize
+                    processparam = S.objsize*[1 1];
+                else
+                    % Nothing; keep unchanged
+                    disp('loadoutput_CallbackNo "processparam" to load.')
+                end
+            end
+            if isfield(S, 'islinkdone')
+                islinkdone = S.islinkdone;
+            else
+                % field doesn't exist; guess from row 6
+                islinkdone = min(objs_link(6,:))>0;
+            end
+            if isfield(S, 'trackthisdone')
+                trackthisdone = S.trackthisdone;
+            else
+                % field doesn't exist; guess from row 4 for each frame
+                utr_temp = unique(objs(5,:));
+                trackthisdone = false(Nframes,1);
+                for kk = 1:length(utr_temp)
+                    trackthisdone(kk) = min(objs(4,(objs(5,:)==utr_temp(kk))))>0;
+                end
+            end
+            % update the filtered images, if these are being displayed
+            updateprocessandthresh;
+            set(hmsg, 'String', 'Done loading variables.');
+            % set sliders and checkboxes
+            set(hprocessopt, 'Value', find(strcmp(processoptarray,processopt)));
+            switch processopt
+                case 'spatialfilter'
+                    % Spatial filtering
+                    set(hbpfiltsize, 'Value', processparam(1));
+                    set(hbpfiltsizetext, 'String', sprintf('%d', processparam(1)));
+                    set(hnsize, 'Value', processparam(2));
+                    set(hnsizetext, 'String', sprintf('%d', processparam(2)));
+                case 'gradientvote'
+                    % Gradient voting
+                    set(hgrobjsize, 'Value', processparam(1));
+                    set(hgrobjsizetext, 'String', sprintf('%d', processparam(1)));
+                    set(hgraddiropt, 'Value', processparam(2));
+                    set(hgrthreshtext, 'String', sprintf('%.3f', processparam(3)));
+                case 'none'
+                    set(hbpfiltsize, 'Value', processparam(1));
+                    set(hbpfiltsizetext, 'String', sprintf('%d', processparam(1)));
+            end
+            % Call processopt_Callback, just to set highlights color of
+            % buttons
+            processopt_Callback
+            set(htrackthisdone, 'Value', trackthisdone(currframe-frmin+1));
+            switch threshopt
+                case 1
+                    set(hthresh1,'Value', thresh);
+                    set(hthreshtext1, 'String', sprintf('%.4f', thresh));
+                case 2
+                    set(hthresh2,'Value',-thresh);
+                    set(hthreshtext2, 'String', sprintf('%.4f', -thresh));
+                case 3
+                    set(hthresh3,'Value',thresh);
+                    set(hthreshtext3, 'String', sprintf('%d', thresh));
+            end
+            set(hthreshopt, 'Value', threshopt);
+            threshopt_Callback; % set the shading, etc.; a bit redundant
+            set(htrackalldone, 'Value', sum(trackthisdone)==length(trackthisdone));
+            set(hlinkdone, 'Value', islinkdone);  % update linkage variable
         end
     end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Call back functions for image plotting
+% Callback functions for image plotting
 
-    function displayimage(hObject, eventdata, handles)
+    function displayimage(hObject, eventdata)
         % Display the present frame
         if exist('im1', 'var')
             delete(im1); clear im1
@@ -1492,10 +1780,6 @@ displayimage
             im1 = imshow(threshprocessA, [], 'Parent', axeshandle);
         elseif showprocess
             im1 = imshow(processedA, [], 'Parent', axeshandle);
-%         elseif showwatershed
-%             im1 = imshow(markedA, [], 'Parent', axeshandle);
-        elseif showbilateralfilter
-            im1 = imshow(bilateralA, [], 'Parenst', axeshandle);
         else
             im1 = imshow(A, [], 'Parent', axeshandle);
         end
@@ -1544,15 +1828,6 @@ displayimage
                         end
                     end
                 end
-%                 (I think Tristan wrote this to superimpose a BW image of regions)
-%                 if strcmp(sizestr, 'bilateral_filter')
-%                     im1 = im1/max(max(im1));
-%                     B = bfilter2(im1, 2*processparam(1)/2, [processparam(1)/2, 10]);
-%                     bw = im2bw(B,graythresh(B));
-%                     im1(bw) = max(max(im1));
-% %                     markedA = A;
-% %                     markedA(L==0 | bgm | fgm) = 50;
-%                 end
             end
             if get(hdispIDs, 'Value')
                 % show IDs
@@ -1579,7 +1854,6 @@ displayimage
             end
         end
     end
-
  
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1624,12 +1898,12 @@ displayimage
             % Not done, so use particle ID
             output_txt = thisobj(4);
         end
-        set(t, 'Data', thisobj);  % for data table
+        set(cell_table, 'Data', thisobj);  % for data table
     end
 
 
 
-%Callback for the button group
+% Callback for the button group
 
     function selcbk(hObject,eventdata)
         switch get(eventdata.NewValue,'String') % Get Tag of selected object.

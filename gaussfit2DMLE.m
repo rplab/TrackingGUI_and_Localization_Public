@@ -36,8 +36,8 @@
 % February 7, 2012
 % March 15, 2012 -- px, py inputs
 % April 6, 2012 -- check if center is outside the image
-% last modified Sept. 19, 2017: minor fix to offset calculation,
-% out-of-bounds calculation.
+% Sept. 19, 2017: minor fix to offset calculation, out-of-bounds calculation.
+% last modified June 11, 2020: minor fix to out-of-bounds calculation 
 
 function [A, x0, y0, sigma, offset] = gaussfit2DMLE(z, tolz, params0, px, py)
 
@@ -58,7 +58,7 @@ if ~exist('tolz', 'var') || isempty(tolz)
 end
 if ~exist('params0', 'var') || isempty(params0)
     % Default: "center of mass" of the 3x3 square centered on the brightest pixel 
-    [maxzy maxzx] = find(z==max(z(:)));
+    [maxzy, maxzx] = find(z==max(z(:)));
     % If there are multiple equal-brightness maxima (e.g. if the image is
     % saturated) just use the image center:
     if size(maxzx,1)>1
@@ -108,7 +108,7 @@ sigma = params(4);
 offset = params(1) - zoff;
 
 % Check if particle center is outside of image; return simple centroid if so
-if (x0<min(px)) || (x0>max(px)) || (x0<min(py)) || (x0>max(py))
+if (x0<min(px(:))) || (x0>max(px(:))) || (x0<min(py(:))) || (x0>max(py(:)))
     sz = sum(z(:));
     x0 = sum(sum(z.*px))/sz;
     y0 = sum(sum(z.*py))/sz;

@@ -1,4 +1,4 @@
-% fo5_rp.m : finds objects in one 2D image
+% fo5_rp.m : finds objects in a 2D image
 %    Determines neighborhoods in which to apply precise particle 
 %    localization algorithms, calls these algorithms, and returns particle
 %    positions.
@@ -58,8 +58,7 @@
 %        OR fitstr can be a cell array such as {'radial'; 'momentcalc'} --
 %        note the curly braces -- in which case the first element is the
 %        center-finding method, the second is the orientation-finding
-%        method (for elliptical particles}, and the third is the
-%        size-finding method (e.g. for vesicle domains).
+%        method (for elliptical particles}.
 %     Center-finding:
 %        -- [default] 'radial'.  Radial-symmetry based fit.  Fast, accurate -- see
 %           notes July-August 2011, and RP's Nature Methods paper, June 2012.
@@ -83,11 +82,6 @@
 %           point-particles or spherical colloids)
 %        -- 'momentcalc' call simpleellipsefit.m for simple determination of
 %           the ellipsoid corresponding to the intensity covariance matrix
-%      Size finding:
-%        -- 'equivdiameter'
-%        -- 'watershed'
-%        -- 'bilateral_filter' (Use this.)
-%        NEEDS BETTER NOTES
 % try1pernhood : (optional; default false).  Input to calcthreshpts.m
 %     If true, dilate local maxima to try to have only one local max 
 %     per neighborhood.  (This is always done for threshold option 3, 
@@ -116,7 +110,7 @@
 %             (4) particleid;
 %             (5) frame;
 %             (6) trackid;
-%             (7) sigma; [OR: domain radius, if using size-finding]
+%             (7) sigma; 
 %             (8) meand2]
 %          sigma is the 2D Gaussian width (std)('nonlineargauss'), the square
 %            root of the second moment ('radial') or zero ('centroid')
@@ -157,8 +151,11 @@
 %   April 2014: Size finding alrorithms for phase separated domains (TH)
 %   June 21, 2017 (incorporate prior dimg; avoids errors if there are no
 %      objects; better comments for Tristan Hormel's size finding; clean up objs output)
-% Last modified Dec. 7, 2019: avoid getnhood (absent from newer MATLAB
-%    versions)
+%   Dec. 7, 2019: avoid getnhood (absent from newer MATLAB
+%       versions)
+%   June 23, 2020: Delete size-finding algorithms. See previous versions,
+%   or "Deleted domain segmentation code"
+% Last modified: June 23, 2020
 
 function [objs] = fo5_rp(img, processopt, processparam, thresh, fitstr, ...
     try1pernhood, nhoodctrs, lsqoptions, dimg)
@@ -193,15 +190,9 @@ if ischar(fitstr)
     % character array -> only one string, so center-finding only
     ctrfitstr = fitstr;
     orientationstr = [];
-    sizestr = [];
 elseif iscell(fitstr)
     ctrfitstr = char(fitstr(1));
     orientationstr = char(fitstr(2));
-    if length(fitstr)>2
-        sizestr = char(fitstr(3));
-    else
-        sizestr = [];
-    end
 else
     errordlg('fo5_rp.m: invalid "fitstr"!');
 end
@@ -209,9 +200,6 @@ end
 % calculate orientations
 if strcmpi(orientationstr, 'none')
     orientationstr = [];
-end
-if strcmpi(sizestr, 'none')
-    sizestr = [];
 end
         
 if ~exist('lsqoptions', 'var') || isempty(lsqoptions)
@@ -405,12 +393,12 @@ if ~isempty(x)
         case {'gaussmle'}
             % Gaussian fit via maximum likelihood estimmation -- most accurate
             for j = 1:length(x)
-                [A, xcent(j), ycent(j), sigma(j), offset] = gaussfit2DMLE(cropimg(:,:,j));
+                [~, xcent(j), ycent(j), sigma(j), ~] = gaussfit2DMLE(cropimg(:,:,j));
             end
         case {'nonlineargauss'}
             % Gaussian fit via nonlinear least squares
             for j = 1:length(x)
-                [A, xcent(j), ycent(j), sigma(j), offset] = gaussfit2Dnonlin(cropimg(:,:,j), [], [], [], [], lsqoptions);
+                [~, xcent(j), ycent(j), sigma(j), ~] = gaussfit2Dnonlin(cropimg(:,:,j), [], [], [], [], lsqoptions);
                 % savemass(j) = A*2*pi*sigma(j)*sigma(j);  % Area under a 2D gaussian
                 %        Don't use this, since gives large values for weak Gaussians
             end
@@ -420,7 +408,7 @@ if ~isempty(x)
             % via polynomial fit of log(intensity),
             % using gaussfit2D.m with a 0.2 threshold
             for j = 1:length(x)
-                [A, x0, sigma_x, y0, sigma_y] = gaussfit2D(lsumx, lsumy, cropimg(:,:,j), 0.2);
+                [~, x0, sigma_x, y0, sigma_y] = gaussfit2D(lsumx, lsumy, cropimg(:,:,j), 0.2);
                 if imag(x0)>0.0
                     xcent(j) = 0.0;  % return zero -- nonsense
                 else
@@ -442,7 +430,7 @@ if ~isempty(x)
             noiselevel = 220;
             disp('hardwiring noise level!!!  -- re-write this')
             for j = 1:length(x)
-                [xcent(j),ycent(j),A,sigma(j)] = ...
+                [xcent(j),ycent(j), ~ ,sigma(j)] = ...
                     gauss2dcirc(cropimg(:,:,j),repmat(lsumx,size(cropimg,1),1),...
                     repmat(lsumy',1,size(cropimg,2)),noiselevel);
             end
@@ -503,120 +491,7 @@ if ~isempty(orientationstr)
     end
 end
 
-%% Size determination, for domains (Tristan Hormel)
-% equivdiameter and watershed don't work particularly well. Use the
-% bilateral filter method -- TH
 
-% NOTE: This should be cleaned up; arrays are not pre-allocated, etc. --
-% Raghu
-
-if ~isempty(sizestr)
-    switch lower(sizestr)
-        case {'equivdiameter'}
-            for j = 1:length(x)
-                cropimgscaled(:,:,j) = cropimg(:,:,j)./max(max(cropimg(:,:,j)));
-                threshold(j) = graythresh(cropimgscaled(:,:,j));
-                bw(:,:,j) = im2bw(cropimgscaled(:,:,j),threshold(j)); %so, could process more, but
-                s = regionprops(bw(:,:,j),'EquivDiameter');
-                alldiameters = cat(1, s.EquivDiameter);
-                radii(j) = max(alldiameters)/2;
-            end
-        case {'watershed'}
-            %for j = 1:length(x)
-            radii = zeros(1,length(x));
-            [ L, bgm, fgm4 ] = DomainWatershed( img, [xn; yn] );
-            region_IDs = diag(L(round(yn),round(xn)));
-            for j = 1:length(x)
-                radii(j) = (sum(L(:)==region_IDs(j))/pi)^(1/2);
-            end
-            %                 Lrgb = label2rgb(L, 'jet', 'w', 'shuffle');
-            %                 figure, imshow(Lrgb);
-            %                 hold on
-            %                 plot(xn,yn,'ro','LineWidth',2);
-            %end
-        case{'bilateral_filter'}
-            sigspace = 3;
-            sigintense = 1;
-            radii = zeros(1,length(x));
-            for j = 1:length(x)
-                cropimg(:,:,j) = cropimg(:,:,j)/max(max(cropimg(:,:,j)));
-                B = bfilter2(cropimg(:,:,j),5,[sigspace, sigintense]);
-                bw = im2bw(B,graythresh(B));
-                %                 figure; imshow(bw); %Useful for debugging
-                s = regionprops(bw,'area');
-                areas = cat(1,s.Area);
-                if length(areas)==1;
-                    radii(j) = sqrt(areas/pi);
-                    xup = 0; %will make this larger to make window larger, if needed
-                    xdown = 0;
-                    yup = 0;
-                    ydown = 0;
-         
-                    while sum([sum(bw(1,:)), sum(bw(:,1)), sum(bw(end,:)), sum(bw(:,end))])>0 % domain overlaps edge of window
-                        if xup<30
-                            if yup<30
-                                if xdown<30
-                                    if ydown<30
-                                        if sum(bw(1,:))>0
-                                            ydown = ydown+1;
-                                        elseif sum(bw(end,:))>0
-                                            yup = yup+1;
-                                        elseif sum(bw(:,1))>0
-                                            xdown = xdown+1;
-                                        else
-                                            xup = xup+1;
-                                        end
-                                        rerect = [(round(x(j)) - floor(lenx/2)-xdown) (round(y(j)) - floor(leny/2)-ydown) (lenx+xup+xdown-1) (leny+yup+ydown-1)];
-                                        recropimg = imcrop(img, rerect);
-                                        recropimg = recropimg/max(max(recropimg));
-                                        B = bfilter2(recropimg,5,[sigspace, sigintense]);
-                                        %figure; imshow(B); %debug
-                                        bw = im2bw(B,graythresh(B));
-                                        %figure; imshow(bw); %for debugging
-                                        s = regionprops(bw,'area');
-                                        areas = cat(1,s.Area);
-                                        if length(areas)==1
-                                            radii(j) = sqrt(areas/pi);
-                                        else
-                                            radii(j) = NaN;
-                                            bw = 0;
-                                        end
-                                    else
-                                        break
-                                    end
-                                else
-                                    break
-                                end
-                            else
-                                break
-                            end
-                        else
-                            break
-                        end
-                    end
-                else
-                    radii(j) = NaN;
-                end
-            end
-            
-%             img = img/max(max(img));
-%             B = bfilter2(img, 5, [3, .1]);
-%             bw = im2bw(B,graythresh(B));
-%             s = regionprops(bw,'area','centroid');
-%             areas = cat(1,s.Area);
-%             centroids = cat(1,s.Centroid);
-%             if length(areas)>1
-%                 separations = dist(centroids,[xn;yn]);
-%                 [mindists, mininds] = min(separations);
-%                 ordered_areas = areas(mininds);
-%                 radii = (ordered_areas/pi).^(1/2);
-%             else
-%                 radii = NaN;
-%             end
-        otherwise
-            errordlg('Unknown size method! [fo5_rp.m]');
-    end
-end
     
 %% Plot found centers
 if showplots
@@ -654,11 +529,8 @@ if ~isempty(x)
     objs(2,:) = yn;
     objs(3,:) = savemass;
     objs(4,:) = 1:length(x);
-    objs(7,:) = sigma; % Overwrite with "radii" below, if sizestr was specified
+    objs(7,:) = sigma; 
     objs(8,:) = meand2;  % zero for all methods other than 'radial'
-    if ~isempty(sizestr)
-        objs(7,:) = radii;
-    end
     if ~isempty(orientationstr)
         % finding orientation
         objs(9,:) = theta;
