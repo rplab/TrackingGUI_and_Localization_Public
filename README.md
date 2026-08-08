@@ -4,5 +4,7 @@
 
 **Files:** See "Particle tracking GUI Manual" for a list of files and brief descriptions.
 
+**Python code:** Translations added to \Radial Symmetry Python Translation
+
 Send comments and questions to Raghuveer Parthasarathy at raghu@uoregon.edu .
 
